@@ -4,9 +4,9 @@
 using namespace std;
 
 vector< pair <zframe_t* , string > > allNodes; // IdNodo: ipNodo
-vector< pair <zframe_t* , string > > misConexiones; //Idnodo: ipnodo
+unordered_map<zframe_t* , string > misConexiones; //Idnodo: ipnodo
 vector<string> canciones; //Las canciones que tiene el nodo
-typedef unordered_map<string,vector<string>> DIC;
+typedef unordered_map<string,vector<string> > DIC;
 DIC partes; // song:<part1,part2...> BD local
 unordered_map<string,DIC> song_nodes; //song:<parte:<nodo1,nodo2...>>
 string myIP; //Ip del nodo para crear el registro
@@ -58,7 +58,7 @@ void crearmapa(){
 	}
 }
 
-void buildConnectionMsg(void* context,string dir,zframe_t* &id){
+void buildConnectionMsg(zctx_t* context,string dir,zframe_t* id){
   //Hago la solicitud a un nodo de que me envia su BD
 
   void* doRequestBD = zsocket_new(context, ZMQ_DEALER);
@@ -75,7 +75,7 @@ void buildConnectionMsg(void* context,string dir,zframe_t* &id){
 }
 
 
-void handleNodeMessage(zmsg_t* msg,zmsg_t* outmsg,void* Send,void* toCoor,void* context){
+void handleNodeMessage(zmsg_t* msg,zmsg_t* outmsg,void* toCoor,zctx_t* context){
  zframe_t* idN=zmsg_pop(msg);
  string code(zmsg_popstr(msg));
 
@@ -91,14 +91,14 @@ void handleNodeMessage(zmsg_t* msg,zmsg_t* outmsg,void* Send,void* toCoor,void* 
 
      for(int i=0;i<N;i++){
        zmsg_t* msg= zmsg_new();
-       zframe_t* copy2=zframe_dup(nodos[i].first);
+       zframe_t* copy2=zframe_dup(allNodes[i].first);
        zmsg_prepend(msg,&copy2);
        zmsg_addstr(msg,"Conexiones");
        zmsg_addstr(msg,to_string(steps).c_str());
        int p=1;
        for(int j=1;j<=steps;j++){
          if(p>=N)p=p%N;
-         zmsg_addstr(msg,nodos[p].second.c_str());
+         zmsg_addstr(msg,allNodes[p].second.c_str());
          p=p<<1;
        }
        zmsg_send(&msg,toCoor);
@@ -115,7 +115,7 @@ void handleNodeMessage(zmsg_t* msg,zmsg_t* outmsg,void* Send,void* toCoor,void* 
    int numNodes=atoi(zmsg_popstr(msg)); //nsongs
    for ( int it = 0; it<numNodes; it++ ){
      string song(zmsg_popstr(msg));
-     DIR part_nodo;
+     DIC part_nodo;
      if(song_nodes.count(song)==0){
        //CREAR LA ESTRUCTURA Y GUARDAR LA PARTE
        //Dir=> misConexiones[idN]
@@ -142,9 +142,10 @@ void handleNodeMessage(zmsg_t* msg,zmsg_t* outmsg,void* Send,void* toCoor,void* 
 
  }else if(code.compare("Conexiones")==0){
    int len=atoi(zmsg_popstr(msg));
+   zframe_t* copy=zframe_dup(idN);
    for(int i=0;i<len;i++){
      string dirRec(zmsg_popstr(msg));
-     misConexiones.push_back(make_pair(copy,dirRec));
+     misConexiones[copy]=dirRec;
      //Envio solicitud de BD
      buildConnectionMsg(context,dirRec,idN);
    }
@@ -195,61 +196,54 @@ int main(int argc, char** argv){
   // [Dirtracker][PortTracker][NodoActualDir][NodoActualPort][DirFiles][Delay]
   // ./Client localhost 5555 localhost 6666 Temp 5
   // Anisho.
-  //string IzqDir=argv[1];
-  //string IzqPort=argv[2];
-  string DerDir=argv[1];
-  string DerPort=argv[2];
-  string CoorDir=argv[3]; // el mancito principal
-  string CoorPort=argv[4];
-  string MayDir=argv[5]; // Mi diretión
-  string MayPort=argv[6];
-  N=atoi(argv[7]);
+  //string isBoot=argv[1]; //Si es 1 es boot, si es 0 no es boot
+  string CoorDir=argv[1]; //Boot nodo
+  string CoorPort=argv[2];//Boot nodo
+  string MyDir=argv[3]; // Mi diretión
+  string MyPort=argv[4];// Mi diretión
+  N=atoi(argv[5]);
 
-
-  //string IzqConnect="tcp://"+IzqDir+":"+IzqPort;
-  string DerConnect="tcp://"+DerDir+":"+DerPort;
-  string NodeListenerConnect="tcp://*:"+MayPort;
+  string NodeListenerConnect="tcp://*:"+MyPort;
   string Coordinador="tcp://"+CoorDir+":"+CoorPort;
 
   zctx_t* context = zctx_new();
-
-  void* Send = zsocket_new(context, ZMQ_DEALER);
-  int a = zsocket_connect(Send, DerConnect.c_str());
-  cout << "connecting to DerNode: "<<DerConnect<< (a == 0 ? " OK" : "ERROR") << endl;
-  cout << "Listening! DerNode" << endl;
-
-  void* Rec = zsocket_new(context, ZMQ_ROUTER);
-  int b = zsocket_bind(Rec,NodeListenerConnect.c_str());
+    
+  void* Recibir = zsocket_new(context, ZMQ_ROUTER);
+  int b = zsocket_bind(Recibir,NodeListenerConnect.c_str());
   cout << "Listening! Nodes at : "<<NodeListenerConnect << (b == 0 ? " OK" : "ERROR") << endl;
 
   void* toCoor = zsocket_new(context, ZMQ_DEALER);
   int c = zsocket_connect(toCoor, Coordinador.c_str());
-  cout << "connecting to DerNode: "<<Coordinador<< (c == 0 ? " OK" : "ERROR") << endl;
-  cout << "Listening! DerNode" << endl;
+  cout << "Connecting to Coor: "<<Coordinador<< (c == 0 ? " OK" : "ERROR") << endl;
 
 
   //Enviar un mensaje Coordinador
+  //Tener en cuenta que necesito mi ip para compartirla, lo mejor es colocar una variable que se llame.
+  //COMO ME PASAN MYIP Y COOR NO NECESITO OTRA VARIABLE SIMPLEMENTE CON UN LOCALHOST DIGO CUAL ES EL PRIMEROSS
+  
+  //Si no es coordinador envio un mensaje de registro
   if(CoorDir.compare("localhost")!=0){
     msgRegistrar(toCoor,NodeListenerConnect);
   }else{
+    //Si es coordinado simplemente guarda la ip en allNodes
     zmsg_t* m=zmsg_new();
     zmsg_addstr(m,"BootPeer");
 
     zframe_t* id= zmsg_pop(m);
-    nodos.push_back( make_pair(id , NodeListenerConnect));
+    allNodes.push_back( make_pair(id , NodeListenerConnect));
   }
 
 
-  zmq_pollitem_t items[] = {{Rec, 0, ZMQ_POLLIN, 0}};
+  zmq_pollitem_t items[] = {{Recibir, 0, ZMQ_POLLIN, 0}};
 
   while (true) {
       zmq_poll(items, 1, 10 * ZMQ_POLL_MSEC);
       if (items[0].revents & ZMQ_POLLIN) {
         	cerr << "From NO se de quien\n";
-        	zmsg_t* msg=zmsg_recv(Rec);
+        	zmsg_t* msg=zmsg_recv(Recibir);
     			zmsg_print(msg);
         	zmsg_t* outmsg = zmsg_new();
-        	handleNodeMessage(msg,outmsg,Send,toCoor,context);
+        	handleNodeMessage(msg,outmsg,toCoor,context);
       }
   	}
 
